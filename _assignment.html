@@ -1,0 +1,1450 @@
+<!-- 
+    tips:
+    1. i 開啓 背包
+    2. f 互動醫院 / market
+    3. e 攻擊喪尸
+    4. WASD 來移動
+ -->
+<style>
+    :root {
+        display: grid;
+    }
+
+    #map {
+        border: 1px solid #333;
+    }
+
+    #panel {
+        background-color: #fff;
+        border: 1px solid #999;
+        border-radius: 5px;
+        margin: 10px;
+        padding: 5px;
+        font-size: 16px;
+    }
+
+    #panel img {
+        width: 24px;
+    }
+
+    #panel * {
+        vertical-align: middle;
+    }
+
+    #step {
+        padding-top: 10px;
+        font-weight: bold;
+        font-size: larger;
+    }
+
+    #info {
+        font-size: 16px;
+        font-family: 'Roboto', sans-serif;
+        font-weight: normal;
+    }
+
+    #itemBox {
+        position: absolute;
+        top: 100px;
+        right: 200px;
+        width: 300px;
+        padding: 15px;
+        border: 1px solid #ccc;
+        background-color: white;
+        z-index: 100;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    #itemBox h3 {
+        margin-top: 0;
+    }
+
+    #collectedItems img {
+        width: 30px;
+        height: 30px;
+        margin: 5px;
+    }
+
+    #collectedItems {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    .notification {
+        display: none;
+        /* Hidden by default */
+        position: fixed;
+        top: -100px;
+        /* Initially off-screen */
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: #333;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 5px;
+        font-size: 16px;
+        z-index: 1000;
+        transition: top 0.5s ease;
+        /* Smooth slide-down effect */
+    }
+
+    .notification.show {
+        top: 20px;
+        /* When shown, the notification slides to this position */
+    }
+</style>
+
+<template>
+    <main>
+        <div id="dropNotification" class="notification"></div>
+        <div id="map"></div>
+        <!-- Item Box Container -->
+        <div id="itemBox" style="display: none;">
+            <h3>Player Details</h3>
+            <p id="playerHP">HP: </p>
+            <p id="playerAttack">Attack: </p>
+            <hr>
+            <p id="playerItems">Items Collected: </p>
+
+            <!-- Add a section to display the collected supplements or items -->
+            <div id="collectedItems" class="collected-item">
+                <!-- Supplement icons will be displayed here -->
+            </div>
+        </div>
+        <template>
+            <div id="panel">
+                <table>
+                    <tr>
+                        <td colspan="2" id="step">Day: {{ day }}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" id="step">HP: {{ player.hp }}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" id="step">ATK: {{ player.attack }}</td>
+                    </tr>
+                </table>
+            </div>
+        </template>
+    </main>
+</template>
+
+<script>
+    const DISTANCE = 1000; // Default half-diagonal distance (meter) of the boundary
+    const MOVEMENT = 5;    // Default movement distance (meter)
+
+    // TODO(8): Audio files
+    const audio1 = new Audio('audio/1.mp3');
+    const audio2 = new Audio('audio/2.mp3');
+    const audio3 = new Audio('audio/3.mp3');
+    const audio4 = new Audio('audio/night.mp3');
+    const audio5 = new Audio('audio/swordSlice.mp3');
+    const audio6 = new Audio('audio/zombieAttack.mp3');
+
+
+    app.component({
+        data: () => ({
+            player: {
+                position: center,
+                hp: 100,  // Current HP value
+                maxHP: 100, // Maximum HP
+                collectedItems: [],
+                attack: 5,
+            },
+            darkMode: true, // Flag to track current mode
+            useBounds: true,
+            bounds: null,
+            portal: null,
+            day: 1,
+            survivalHub: [],
+            markers: [],
+            zombies: [],
+            additionalZombies: [], // Array to store zombies added during dark mode
+            supplements: [],
+            markets: [],
+            armory: [],
+            win: false,
+            step: 0,
+            marketItems: [ // Define items here
+                { name: 'Food', icon: 'image/a/canned.webp', healAmount: 10, probability: 0.40, type: 'food', atk: 0 },  // 30% chance to drop food
+                { name: 'Drink', icon: 'image/a/water.jpg', healAmount: 5, probability: 0.30, type: 'drink', atk: 0 },  // 30% chance to drop drink
+                { name: 'Bandage', icon: 'image/a/bandage.webp', healAmount: 15, probability: 0.20, type: 'consumable', atk: 0 }, // 25% chance to drop bandage
+                { name: 'Knife', icon: 'image/a/knife.png', healAmount: 0, probability: 0.10, type: 'weapon', atk: 10 },  // 10% chance to drop knife
+            ],
+            medicines: [
+                { name: 'Bandage', icon: 'image/a/bandage.webp', healAmount: 15, probability: 0.80, type: 'consumable', atk: 0 }, // 80% chance to drop bandage
+                { name: 'Medicine', icon: 'image/a/medicine.png', healAmount: 50, probability: 0.20, type: 'consumable', atk: 0 }, // 20% chance to drop medicine
+            ],
+            weapons: [
+                { name: 'Naval Cutlass', icon: 'image/a/navalCutlass.png', healAmount: 0, probability: 0.50, type: 'weapon', atk: 20 }, // 50% chance to drop naval Cutlass
+                { name: 'Da Dao', icon: 'image/a/daDao.png', healAmount: 0, probability: 0.30, type: 'weapon', atk: 20 }, // 30% chance to drop Da dao
+                { name: 'Two Handed Sword', icon: 'image/a/twoHandedSword.png', healAmount: 0, probability: 0.20, type: 'weapon', atk: 30 }, // 20% chance to drop Two Handed Sword
+                { name: 'Knightly Sword', icon: 'image/a/knightlySword.png', healAmount: 0, probability: 0.10, type: 'weapon', atk: 40 }, // 10% chance to drop KnightlySword
+
+            ],
+        }),
+        computed: {
+            hpPercentage() {
+                return (this.player.hp / this.player.maxHP) * 100; // Calculate HP percentage
+            },
+        },
+        methods: {
+            async saveCollectedItems() {
+                const playerDocRef = GAMESTATUS.doc('player'); // Reference to the player document
+
+                // Prepare the data for Firestore (ensure items are valid)
+                const collectedItemsToSave = this.player.collectedItems.map(item => ({
+                    name: item.name,
+                    icon: item.icon,
+                    healAmount: item.healAmount || 0,
+                    quantity: item.quantity || 1 // Ensure quantity is valid
+                }));
+
+                try {
+                    // Save the player's HP and collected items
+                    playerDocRef.set({
+                        hp: this.player.hp,
+                        collectedItems: collectedItemsToSave  // Save items with quantity
+                    }, { merge: true }); // Use merge to avoid overwriting existing fields
+
+                    console.log('Collected items saved successfully');
+                } catch (error) {
+                    console.error('Error saving collected items:', error);
+                }
+            },
+
+            // Load player data from Firestore
+            async loadPlayerData() {
+                try {
+                    const hpDocRef = GAMESTATUS.doc('hp');
+                    const attackDocRef = GAMESTATUS.doc('player');
+
+                    // Load HP
+                    const hpDoc = await hpDocRef.get();
+                    if (hpDoc.exists) {
+                        const hpData = hpDoc.data().hp;
+                        this.player.hp = typeof hpData === 'number' ? hpData : 100; // Default if invalid
+                    }
+
+                    // Load Player Data (Attack and Collected Items)
+                    const attackDoc = await attackDocRef.get();
+                    if (attackDoc.exists) {
+                        const attackData = attackDoc.data();
+                        this.player.attack = typeof attackData.attack === 'number' ? attackData.attack : 5; // Default if invalid
+                        this.player.collectedItems = attackData.collectedItems || []; // Initialize collected items
+                    }
+                } catch (error) {
+                    console.error('Error loading player data:', error);
+                }
+            },
+
+            // Update player data in Firestore
+            async updatePlayerData() {
+                try {
+                    // Prepare the data to update
+                    const playerData = {
+                        hp: this.player.hp,
+                        attack: this.player.attack,
+                        collectedItems: this.player.collectedItems, // Add collected items here
+                    };
+
+                    // Update the HP document
+                    await GAMESTATUS.doc('hp').set({ hp: this.player.hp });
+
+                    // Update the player document with hp, attack, and collected items
+                    await GAMESTATUS.doc('player').set(playerData, { merge: true });
+
+                    console.log('Player data updated successfully:', this.player);
+                } catch (error) {
+                    console.error('Error updating player data:', error);
+                }
+            },
+
+            async updateHealth(amount) {
+                this.player.hp += amount;
+                if (this.player.hp > 100) {
+                    this.player.hp = 100;
+                } else if (this.player.hp <= 0) {
+                    this.player.hp = 0;
+                    this.gameOver();  // Trigger game over logic
+                }
+
+                this.updatePlayerData();  // Save HP after updating
+                this.updateHealthBar();
+                this.updatePlayerStats();
+            },
+            updateHealthBar() {
+                const healthContainer = document.getElementById('healthContainer');
+
+                if (!healthContainer) {
+                    console.error('Health container not found!');
+                    return; // Stop execution if the container doesn't exist yet
+                }
+
+                // Calculate the health percentage based on current HP and maxHP
+                const healthPercentage = this.player.hp;
+
+                // Log to ensure valid health percentage
+                console.log('HP Percentage:', healthPercentage);
+
+                // Update the width of the health bar
+                healthContainer.style.width = `${healthPercentage}%`;
+                // Reset transform to move the bar from the left
+                healthContainer.style.transform = `translateX(0%)`; // No translation needed if decreasing from left to right
+
+                // Update the color based on HP percentage
+                if (healthPercentage > 70) {
+                    healthContainer.style.backgroundColor = 'green'; // Healthy
+                } else if (healthPercentage > 30) {
+                    healthContainer.style.backgroundColor = 'orange'; // Caution
+                } else {
+                    healthContainer.style.backgroundColor = 'red'; // Critical
+                }
+            },
+
+            createHealthBar() {
+                // Create the outer health bar container
+                const healthBarContainer = document.createElement('div');
+                healthBarContainer.id = 'healthBarContainer';
+                healthBarContainer.style.position = 'relative';
+                healthBarContainer.style.width = '100%'; // Set full width
+                healthBarContainer.style.height = '20px'; // Set height
+                healthBarContainer.style.backgroundColor = '#ddd'; // Background color for the health bar
+
+                // Create the inner health container
+                const healthContainer = document.createElement('div');
+                healthContainer.id = 'healthContainer';
+                healthContainer.style.position = 'absolute';
+                healthContainer.style.left = '0';
+                healthContainer.style.height = '100%'; // Set height to fill the container
+                healthContainer.style.width = '100%'; // Set initial width
+                healthContainer.style.backgroundColor = 'green'; // Initial color
+
+                // Append the inner health container to the outer container
+                healthBarContainer.appendChild(healthContainer);
+
+                // Add the health bar container to the map at the specified position
+                this.map.controls[gm.ControlPosition.TOP_CENTER].push(healthBarContainer);
+            },
+
+            createDropDownMessage() {
+                // Create the outer message container
+                const messageContainer = document.createElement('div');
+                messageContainer.id = 'dropDownMessageContainer';
+                messageContainer.style.position = 'fixed'; // Fixed to the screen
+                messageContainer.style.top = '-50px'; // Initially hide above the screen
+                messageContainer.style.left = '50%'; // Center horizontally
+                messageContainer.style.transform = 'translateX(-50%)'; // Center properly
+                messageContainer.style.padding = '10px 20px';
+                messageContainer.style.backgroundColor = '#333'; // Dark background
+                messageContainer.style.color = 'white'; // White text
+                messageContainer.style.borderRadius = '5px';
+                messageContainer.style.fontSize = '16px';
+                messageContainer.style.transition = 'top 0.5s ease'; // Smooth slide-in effect
+                messageContainer.style.zIndex = '1000'; // Ensure it's on top
+                messageContainer.style.display = 'none'; // Initially hidden
+
+                // Append the message container to the body
+                document.body.appendChild(messageContainer);
+
+                // Store reference for later use
+                this.messageContainer = messageContainer;
+            },
+            // Function to get a random item from the items array
+            getRandomItem() {
+                const randomIndex = Math.floor(Math.random() * this.marketItems.length); // Pick a random index
+                return this.marketItems[randomIndex]; // Return the random market items
+            },
+            getRandomMedicineItems() {
+                const randomIndex = Math.floor(Math.random() * this.medicines.length); // Pick a random index
+                return this.medicines[randomIndex]; // Return the hospital items
+            },
+            getRandomWeapons() {
+                const randomIndex = Math.floor(Math.random() * this.weapons.length); // Pick a random index
+                return this.weapons[randomIndex]; // Return the weapons
+            },
+            getRandomLatLng() {
+                // Define the bounding box for Kuala Lumpur (or another specific region)
+                const swLat = 3.100;  // South-West latitude
+                const swLng = 101.600; // South-West longitude
+                const neLat = 3.240;  // North-East latitude
+                const neLng = 101.740; // North-East longitude
+
+                // Generate random latitude and longitude within the bounding box
+                const lat = Math.random() * (neLat - swLat) + swLat;
+                const lng = Math.random() * (neLng - swLng) + swLng;
+
+                return new gm.LatLng(lat, lng);
+            },
+            move(heading) {
+                //  Move the player and pan the map
+                //  Prevent moving out of bounds
+                if (heading != undefined) {
+                    this.step++;
+                    let p = this.player.position;
+                    p = gm.geometry.spherical.computeOffset(p, MOVEMENT, heading);
+
+                    if (this.bounds.contains(p)) {
+                        this.player.position = p;
+                        this.player.setPosition(p);
+                        this.map.setCenter(p);
+                    } else {
+                        audio1.play();
+                    }
+                }
+
+                // Check for proximity with markers
+                for (const m of this.markers.filter(m => !m.found)) {
+                    const a = this.player.position;
+                    const b = m.position;
+                    m.distance = gm.geometry.spherical.computeDistanceBetween(a, b);
+
+                    if (m.distance < 10) {
+                        audio2.play();
+                        m.found = true;
+                        m.setVisible(false);
+                    }
+                }
+
+                // Check for zombie proximity
+                this.checkZombieProximity();
+
+            },
+
+            checkZombieProximityForAttack() {
+                const playerPosition = this.player.getPosition();
+                currentZombie = null;
+
+                // Check for regular zombies
+                this.zombies.concat(this.additionalZombies).forEach(zombie => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, zombie.position);
+                    if (zombie.customData.hp > 0 && distance < 40) {
+                        currentZombie = zombie;
+                        console.log(`Zombie found within ${distance} meters!`);
+                        return; // Exit loop on first proximity match
+                    }
+                });
+
+                // If no zombie is found, currentZombie remains null
+                if (!currentZombie) {
+                    console.log('No zombie within 40 meters.');
+                }
+            },// Helper function to ensure zombie is within range before attacking
+            isZombieInRange(zombie) {
+                const playerPosition = this.player.getPosition();
+                const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, zombie.position);
+
+                // Debugging: Log the distance for validation
+                console.log('Distance to zombie in isZombieInRange():', distance);
+
+                return distance < 40; // Return true only if the zombie is within 40 meters
+            },
+
+            checkZombieProximity() {
+                const playerPosition = this.player.getPosition();
+
+                // Check proximity for main zombies
+                this.zombies.forEach(zombie => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, zombie.position);
+
+                    // Check if the zombie is still alive before checking distance
+                    if (zombie.customData.hp > 0 && distance < 30) { // 30 meters proximity threshold
+                        this.zombieAttack(zombie);
+                    }
+                });
+
+                // Check proximity for additional zombies
+                this.additionalZombies.forEach(zombie => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, zombie.position);
+
+                    // Check if the additional zombie is still alive before checking distance
+                    if (zombie.customData.hp > 0 && distance < 30) { // 30 meters proximity threshold
+                        this.zombieAttack(zombie);
+                    }
+                });
+
+                // Check proximity for the zombie king
+                if (this.zombieKing) {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, this.zombieKing.position);
+
+                    // Check if the zombie king is still alive before checking distance
+                    if (this.zombieKing.customData.hp > 0 && distance < 30) { // 30 meters proximity threshold
+                        this.zombieAttack(this.zombieKing);
+                    }
+                }
+            },
+
+            zombieAttack(zombie) {
+                // Check if the zombie is alive before attacking
+                if(this.player.hp != 0){
+                    if (zombie.customData.hp > 0) {
+                        const damage = zombie.customData.atk; // Get the zombie's attack value
+                        this.updateHealth(-damage); // Deal 10 damage to the player
+                        audio6.play();
+                        alert(`A zombie has attacked you and dealt ${damage} damage!`);
+                        this.updateHealthBar();
+                    }
+                }else{
+                    this.gameOver();
+                }
+            },
+            // Function to kill the zombie
+            killZombie(zombie) {
+                // Clear the zombie's movement interval
+                clearInterval(zombie.customData.movementInterval);
+
+                // Remove the zombie marker from the map
+                zombie.setMap(null);
+
+                // Optionally, you can also remove the zombie from your zombies array if needed
+                const index = this.zombies.indexOf(zombie);
+                if (index > -1) {
+                    this.zombies.splice(index, 1); // Remove the zombie from the array
+                }
+
+                // Remove the zombie from the additionalZombies array if it exists
+                const additionalIndex = this.additionalZombies.indexOf(zombie);
+                if (additionalIndex > -1) {
+                    this.additionalZombies.splice(additionalIndex, 1); // Remove from additional zombies array
+                }
+
+                this.showDropDownMessage('Zombie killed!'); // Notify the player
+            },
+
+            moveZombie(zombie, originalPosition) {
+                const distance = 10;
+                const angle = Math.random() * 2 * Math.PI;
+
+                const latOffset = (distance / 111320) * Math.sin(angle);
+                const lngOffset = (distance / (111320 * Math.cos(originalPosition.lat() * Math.PI / 180))) * Math.cos(angle);
+
+                const newPosition = new gm.LatLng(
+                    originalPosition.lat() + latOffset,
+                    originalPosition.lng() + lngOffset
+                );
+
+                zombie.setPosition(newPosition);
+            },
+
+            // Method to check proximity to supplements
+            checkSupplementProximity() {
+                const playerPosition = this.player.getPosition();
+                let isNearSupplement = false; // Flag to track if player is near a supplement
+
+                this.supplements.forEach(supplement => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, supplement.position);
+
+                    if (distance < 30) { // 30 meters proximity threshold
+                        isNearSupplement = true; // Player is near at least one supplement
+                    }
+                });
+
+                return isNearSupplement;
+            },
+
+            // Check proximity to market 
+            checkMarketProximity() {
+                const playerPosition = this.player.getPosition();
+                let isNearMarket = false; // Flag to track if player is near a market
+
+                this.markets.forEach(market => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, market.position);
+
+                    if (distance < 30) { // 30 meters proximity threshold
+                        isNearMarket = true; // Player is near at least one market
+                    }
+                });
+
+                return isNearMarket;
+            },
+            // Check proximity to weapon store 
+            checkArmoryProximity() {
+                const playerPosition = this.player.getPosition();
+                let isNearArmory = false; // Flag to track if player is near a armory
+
+                this.armory.forEach(armory => {
+                    const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, armory.position);
+
+                    if (distance < 30) { // 30 meters proximity threshold
+                        isNearArmory = true; // Player is near at least one armory
+                    }
+                });
+
+                return isNearArmory;
+            },
+            // Check proximity to portal
+            checkPortalProximity() {
+                if (!this.portal || !this.player) {
+                    console.log('Portal or player is not defined.');
+                    return false; // If portal or player is not defined, return false
+                }
+
+                const playerPosition = this.player.getPosition();
+                const portalPosition = this.portal.getPosition();
+
+                // Calculate the distance between player and portal
+                const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, portalPosition);
+
+                // 30 meters proximity threshold
+                const proximityThreshold = 30;
+
+                // Return true if the player is within the proximity threshold
+                return distance <= proximityThreshold;
+            },
+            // Check proximity to weapon store 
+            checkSurvivalHubProximity() {
+                const playerPosition = this.player.getPosition();
+                if (!this.survivalHub.length || !this.survivalHub[0]) {
+                    console.error("Survival Hub marker is not initialized.");
+                    return false; // Return false if the survival hub marker is not set
+                }
+
+                const survivalHubPosition = this.survivalHub[0].getPosition(); // Access the first survival hub marker
+                // Calculate the distance between player and portal
+                const distance = gm.geometry.spherical.computeDistanceBetween(playerPosition, survivalHubPosition);
+
+                // 30 meters proximity threshold
+                const proximityThreshold = 30;
+
+                // Return true if the player is within the proximity threshold
+                return distance <= proximityThreshold;
+            },
+
+            handleDrop(droppedItem, type) {
+                if (droppedItem) {
+                    this.addItemToPlayer(droppedItem);
+                    this.showDropDownMessage(`You found a ${droppedItem.name} at the ${type}!`);
+                    if (type === 'supplement') currentSupplement.visited = true;
+                    if (type === 'market') currentMarket.visited = true;
+                    if (type === 'armory') currentArmory.visited = true;
+                } else {
+                    this.showDropDownMessage(`No items found at the ${type} this time.`);
+                }
+            },
+
+            // Function to update player's HP and attack in the UI
+            updatePlayerStats() {
+                // Update HP value in the UI
+                const playerHPElement = document.getElementById('playerHP');
+                playerHPElement.innerText = `HP: ${this.player.hp}`;
+
+                // Update Attack value in the UI
+                const playerAttackElement = document.getElementById('playerAttack');
+                playerAttackElement.innerText = `Attack: ${this.player.attack}`;
+            },
+
+            // Function to update player's collected items
+            addItemToPlayer(item) {
+                // Initialize collectedItems if undefined
+                if (!this.player.collectedItems) {
+                    this.player.collectedItems = []; // Ensure reactivity
+                }
+
+                // Ensure the item is valid before adding it to the player's inventory
+                if (item && item.name && item.icon) {
+                    const existingItem = this.player.collectedItems.find(collected => collected.name === item.name);
+                    if (existingItem) {
+                        existingItem.quantity += 1;  // Increase quantity if item already exists
+                    } else {
+                        this.player.collectedItems.push({ ...item, quantity: 1 });
+                    }
+                }
+
+                // Update the items collected count on the UI
+                const playerItems = document.getElementById('playerItems');
+                playerItems.innerText = `Items Collected: ${this.player.collectedItems.length}`;
+
+                // Re-render collected items in the item box
+                const collectedItemsDiv = document.getElementById('collectedItems');
+                collectedItemsDiv.innerHTML = '';  // Clear previous items
+
+                // Loop through collectedItems to display them
+                this.player.collectedItems.forEach(collected => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'collected-item';
+
+                    // Add item image
+                    const img = document.createElement('img');
+                    img.src = collected.icon;
+                    img.alt = collected.name;
+                    img.style.width = '30px';
+
+                    // Add item name and quantity
+                    const label = document.createElement('span');
+                    label.innerText = `${collected.name} (x${collected.quantity})`;
+
+                    // Add equip or use buttons based on item type
+                    if (collected.type === 'weapon') {
+                        const equipButton = document.createElement('button');
+                        equipButton.innerText = 'Equip';
+                        equipButton.addEventListener('click', () => this.equipItem(collected));
+                        itemDiv.appendChild(equipButton);
+                    } else {
+                        const useButton = document.createElement('button');
+                        useButton.innerText = 'Use';
+                        useButton.addEventListener('click', () => this.useItem(collected));
+                        itemDiv.appendChild(useButton);
+                    }
+
+                    // Add drop button for all items
+                    const dropButton = document.createElement('button');
+                    dropButton.innerText = 'Drop';
+                    dropButton.addEventListener('click', () => this.dropItem(collected));
+                    itemDiv.appendChild(dropButton);
+
+                    // Append image, label, and buttons to the item div
+                    itemDiv.appendChild(img);
+                    itemDiv.appendChild(label);
+                    collectedItemsDiv.appendChild(itemDiv);
+                });
+
+                // Save the player's collected items to Firestore
+                this.saveCollectedItems();
+            },
+            // Equip weapon function
+            equipItem(item) {
+                if (item.type === 'weapon') {
+                    this.player.equippedWeapon = item;
+                    this.player.attack = item.atk;  // Update player's attack value with weapon's atk value
+                    this.updatePlayerStats();
+                    this.showDropDownMessage(`Equipped ${item.name} with ATK: ${item.atk}`);
+                    // Update player data in Firestore after equipping the weapon
+                    this.updatePlayerData();
+                } else {
+                    alert(`${item.name} cannot be equipped.`);
+                }
+            },
+
+            // Use item function (for food/drink)
+            useItem(item) {
+                if (item.type === 'food' || item.type === 'drink' || item.type === 'consumable') {
+
+                    console.log(item.healAmount);
+                    this.showDropDownMessage(`Used ${item.name}. HP restored by ${item.healAmount}.`);
+
+                    this.updateHealth(item.healAmount);
+                    // Reduce quantity or remove item after use
+                    item.quantity -= 1;
+                    if (item.quantity === 0) {
+                        this.removeItemFromInventory(item);
+                    } else {
+                        // Update the UI with the reduced quantity
+                        this.addItemToPlayer(null);
+                    }
+                }
+            },
+
+            // Drop item function
+            dropItem(item) {
+                // Find the item in the inventory and remove it
+                this.removeItemFromInventory(item);
+                alert(`Dropped ${item.name}`);
+            },
+
+            // Method to enable dark mode for 10 seconds
+            enableDarkMode() {
+                const darkStyle = [
+                    { elementType: 'geometry', stylers: [{ color: '#212121' }] },
+                    { elementType: 'labels.icon', stylers: [{ visibility: 'on' }] },
+                    { elementType: 'labels.text.fill', stylers: [{ color: '#ffffff' }] },
+                    { elementType: 'labels.text.stroke', stylers: [{ color: '#212121' }] },
+                    { featureType: 'administrative', elementType: 'geometry', stylers: [{ color: '#757575' }] },
+                    { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#212121' }] },
+                    { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#757575' }] },
+                    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#424242' }] },
+                    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#000000' }] }
+                ];
+                const dayStyle = []; // Use default styles for day mode
+
+                // Switch to dark mode
+                this.map.setOptions({ styles: darkStyle });
+
+                this.darkMode = true;
+                audio4.play();
+
+                // Switch back to day mode after 10 seconds
+                setTimeout(() => {
+                    this.day++;
+                    this.map.setOptions({ styles: dayStyle });
+                    this.darkMode = false;
+
+
+
+                    // Call enableDarkMode again to switch back to dark mode
+                    setTimeout(() => {
+                        this.enableDarkMode(); // Call the method to switch back to dark mode
+                        //     // Add additional zombies with 200 HP
+                        //     this.addAdditionalZombies();
+                    }, 20000); // 10 seconds
+                }, 20000); // 10 seconds
+            },
+
+            // Helper function to remove an item from inventory
+            removeItemFromInventory(item) {
+                const index = this.player.collectedItems.findIndex(collected => collected.name === item.name);
+                if (index !== -1) {
+                    this.player.collectedItems.splice(index, 1);
+                }
+
+                // Refresh the UI after dropping
+                this.addItemToPlayer(null); // Re-render the item box without the dropped item
+            },
+            gameOver() {
+                // Display the Game Over message
+                alert(`Game Over! You have been survived within ${this.day} days.`);
+
+                this.$router.push('/').then(_ => this.$router.go(-1));
+
+            },
+            winGame() {
+                audio3.play();
+                this.win = true;
+                // Display the Game Over message
+                alert(`Congratulations! You won the game in day ${this.day}! `);
+                this.$router.push('/').then(_ => this.$router.go(-1));
+            },
+            // Function to show the message with a slide-down effect
+            showDropDownMessage(message) {
+                // Set the message text
+                this.messageContainer.innerText = message;
+
+                // Show the message and slide down
+                this.messageContainer.style.display = 'block'; // Ensure it's visible
+                this.messageContainer.style.top = '20px'; // Slide down to visible position
+
+                // Automatically hide the message after 3 seconds
+                setTimeout(() => {
+                    this.messageContainer.style.top = '-50px'; // Slide back up
+                }, 3000); // 3 seconds before hiding
+            },
+
+        },
+        created() {
+            this.$root.title = 'DayX';
+            this.createDropDownMessage();
+        },
+        
+        mounted() {
+            // ================================================================
+            // Google Maps
+            // ================================================================
+            // Reset player HP to max or a default value
+            this.player.hp = this.player.maxHP; // Reset to max HP
+            this.win = false;
+            
+            // Call this when the game starts or player data is loaded
+            this.updatePlayerData();
+            this.updatePlayerStats();
+
+            function computeBounds(center, distance) {
+                const sw = gm.geometry.spherical.computeOffset(center, distance, 225);
+                const ne = gm.geometry.spherical.computeOffset(center, distance, 45);
+                return new gm.LatLngBounds(sw, ne);
+            }
+
+            map = new gm.Map($('#map')[0], {
+                center,
+                zoom: 18,
+                disableDefaultUI: true,
+                clickableIcons: false,
+                fullscreenControl: true,
+                keyboardShortcuts: false,
+                gestureHandling: 'none',
+                restriction: {
+                    latLngBounds: computeBounds(center, DISTANCE + 40),
+                    strictBounds: true,
+                },
+                minZoom: 18,
+                maxZoom: 18,
+            });
+
+            this.map = map;
+
+            const panel = $('#panel')[0];
+            panel.index = 0;
+            this.map.controls[gm.ControlPosition.TOP_LEFT].push(panel);
+
+            this.enableDarkMode();
+
+            // Assuming you have a function to create the health bar element
+            this.createHealthBar();
+            // Add knife with atk:5 at the start of the game
+            const initialKnife = { name: 'Rust Knife', icon: 'image/a/rustKnife.jpeg', healAmount: 0, atk: 5, quantity: 1, type:'weapon' };
+            this.addItemToPlayer(initialKnife);
+            // Load HP when the component is mounted
+            this.loadPlayerData();
+
+            const player = new gm.Marker({
+                position: center,
+                map,
+                icon: 'image/player.gif',
+                animation: gm.Animation.DROP,
+                id: 'playerMarker',
+            });
+
+            this.player = player; // Vue data reference
+
+            const bounds = computeBounds(center, DISTANCE);
+            this.bounds = bounds; // Vue data reference
+
+            // Function to generate a random latitude and longitude within the map bounds
+            function getRandomLatLng(bounds) {
+                const sw = bounds.getSouthWest();
+                const ne = bounds.getNorthEast();
+
+                const lat = Math.random() * (ne.lat() - sw.lat()) + sw.lat();
+                const lng = Math.random() * (ne.lng() - sw.lng()) + sw.lng();
+
+                return new gm.LatLng(lat, lng);
+            }
+
+            // Create the random portal marker
+            const portal = new gm.Marker({
+                position: getRandomLatLng(bounds),
+                map,
+                icon: {
+                    url: 'image/a/portal.gif', // portal image URL
+                    scaledSize: new gm.Size(40, 40),
+                },
+            });
+
+            portal.addListener('click', e => {
+                this.showDropDownMessage('A portal that teleports you to a different location.');
+            });
+
+            // Assign the portal marker to this.portal
+            this.portal = portal;
+
+
+            const rect = new gm.Rectangle({
+                map,
+                bounds,
+                strokeColor: 'red',
+                strokeWeight: 10,
+                fillOpacity: 0,
+                clickable: false,
+            });
+
+            gm.event.addListenerOnce(map, 'bounds_changed', e => {
+                generateMarkers(map);
+                this.move();
+
+                // Call the regenerateZombies function every 20 seconds (20,000 milliseconds)
+                setInterval(() => {
+                    regenerateZombies(map);
+                }, 20000); // 20 seconds
+            });
+
+
+            const regenerateZombies = (mapInstance) => {
+
+                const sw = bounds.getSouthWest();
+                const sp = bounds.toSpan();
+
+                // Generate zombie markers
+                for (let i = 0; i < 10; i++) {
+                    const z = new gm.LatLng(
+                        sw.lat() + sp.lat() * Math.random(),
+                        sw.lng() + sp.lng() * Math.random()
+                    );
+                    addAdditionalZombieMarker(z, mapInstance);
+                }
+            };
+
+            const generateMarkers = (mapInstance) => {
+                // Previous map
+                if (this.useBounds) {
+                    // Get the bounds from the current map instance
+                    //const bounds = mapInstance.getBounds();
+                    const sw = bounds.getSouthWest();
+                    const sp = bounds.toSpan();
+
+                    // Generate zombie markers
+                    for (let i = 0; i < 15; i++) {
+                        const z = new gm.LatLng(
+                            sw.lat() + sp.lat() * Math.random(),
+                            sw.lng() + sp.lng() * Math.random()
+                        );
+                        addZombieMarker(z, mapInstance);
+                    }
+
+                    // Generate supplement markers
+                    for (let i = 0; i < 10; i++) {
+                        const s = new gm.LatLng(
+                            sw.lat() + sp.lat() * Math.random(),
+                            sw.lng() + sp.lng() * Math.random()
+                        );
+                        addSupplementMarker(s, mapInstance);
+                    }
+
+                    // Generate market markers
+                    for (let i = 0; i < 15; i++) {
+                        const m = new gm.LatLng(
+                            sw.lat() + sp.lat() * Math.random(),
+                            sw.lng() + sp.lng() * Math.random()
+                        );
+                        addMarketMarker(m, mapInstance);
+                    }
+
+                    // Generate armory markers
+                    for (let i = 0; i < 1; i++) {
+                        const a = new gm.LatLng(
+                            sw.lat() + sp.lat() * Math.random(),
+                            sw.lng() + sp.lng() * Math.random()
+                        );
+                        addArmoryMarker(a, mapInstance);
+                    }
+
+
+                } else {
+                    // new map
+                    const mapCenter = this.map.getCenter(); // Get the center of the current map instance
+                    const distance = 750; // Define the range (in meters) for placing markers around the center
+
+                    // Generate supplement markers randomly around the map center
+                    for (let i = 0; i < 10; i++) {
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, distance * Math.random(), Math.random() * 360);
+                        addSupplementMarker(randomLatLng, mapInstance);
+                    }
+
+                    // Generate market markers randomly around the map center
+                    for (let i = 0; i < 5; i++) {
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, distance * Math.random(), Math.random() * 360);
+                        addMarketMarker(randomLatLng, mapInstance);
+                    }
+
+                    // Generate armory markers randomly around the map center
+                    for (let i = 0; i < 1; i++) {
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, distance * Math.random(), Math.random() * 360);
+                        addArmoryMarker(randomLatLng, mapInstance);
+                    }
+
+                    // Generate survivalHub markers randomly around the map center
+                    for (let i = 0; i < 1; i++) {
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, distance * Math.random(), Math.random() * 360);
+                        addSurvivalHubMarker(randomLatLng, mapInstance);
+                        addZombieKingMarker(randomLatLng, mapInstance);
+                    }
+                    const minDistance = 50; // Minimum distance from player
+
+                    // Generate zombie markers randomly around the map center
+                    for (let i = 0; i < 15; i++) {
+                        let randomDistance;
+                        do {
+                            randomDistance = distance * Math.random();
+                        } while (randomDistance < minDistance);
+
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, randomDistance, Math.random() * 360);
+                        addZombieMarker(randomLatLng, mapInstance);
+
+                    }
+                    for (let i = 0; i < 7; i++) {
+                        let randomDistance;
+                        do {
+                            randomDistance = distance * Math.random();
+                        } while (randomDistance < minDistance);
+
+                        const randomLatLng = gm.geometry.spherical.computeOffset(mapCenter, randomDistance, Math.random() * 360);
+
+                        addAdditionalZombieMarker(randomLatLng, mapInstance)
+                    }
+
+
+                }
+            };
+
+            // Set up the interval to check proximity every 1 second
+            setInterval(() => {
+                this.checkZombieProximity();
+            }, 1000); // 1000 milliseconds = 1 second
+
+
+            let currentZombie = null; // To track the zombie you are interacting with
+
+            const addZombieMarker = (position, mapInstance) => {
+                const zombie = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/zombie.gif',
+                        scaledSize: new gm.Size(40, 40),
+                    },
+                });
+
+                // Initialize zombie HP
+                zombie.customData = { hp: 100, atk: 10 };
+
+                // Store the movement interval in customData
+                zombie.customData.movementInterval = setInterval(() => {
+                    this.moveZombie(zombie, position);
+                }, 1000);
+
+                // Set currentZombie when the zombie is clicked
+                zombie.addListener('click', () => {
+                    currentZombie = zombie; // Set the current zombie to interact with
+                    this.showDropDownMessage(`Selected a zombie. HP: ${zombie.customData.hp}, Atk: ${zombie.customData.atk}`); // Show zombie's HP
+                });
+
+                this.zombies.push(zombie); // Add zombie to the array
+            };
+            const addZombieKingMarker = (position, mapInstance) => {
+                const zombie = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/zombieKing.webp',
+                        scaledSize: new gm.Size(40, 40),
+                    },
+                });
+
+                // Initialize zombie HP
+                zombie.customData = { hp: 250, atk: 25 };
+
+                // Store the movement interval in customData
+                zombie.customData.movementInterval = setInterval(() => {
+                    this.moveZombie(zombie, position);
+                }, 1000);
+
+                // Set currentZombie when the zombie is clicked
+                zombie.addListener('click', () => {
+                    currentZombie = zombie; // Set the current zombie to interact with
+                    this.showDropDownMessage(`Selected a zombie. HP: ${zombie.customData.hp}, Atk: ${zombie.customData.atk}`);
+                });
+
+                this.zombieKing = zombie;
+            };
+
+            const addAdditionalZombieMarker = (position, mapInstance) => {
+                if (this.darkMode === true) {
+                    const zombie = new gm.Marker({
+                        map: mapInstance,
+                        position,
+                        icon: {
+                            url: 'image/strongZombie.png',
+                            scaledSize: new gm.Size(40, 40),
+                        },
+                    });
+
+                    // Initialize zombie HP
+                    zombie.customData = { hp: 200, atk: 20 };
+
+                    // Store the movement interval in customData
+                    zombie.customData.movementInterval = setInterval(() => {
+                        this.moveZombie(zombie, position);
+                    }, 1000);
+
+                    // Set currentZombie when the zombie is clicked
+                    zombie.addListener('click', () => {
+                        currentZombie = zombie; // Set the current zombie for interaction and attack
+                        this.showDropDownMessage(`Selected a zombie. HP: ${zombie.customData.hp}, Atk: ${zombie.customData.atk}`);
+                    });
+
+                    this.additionalZombies.push(zombie); // Add zombie to the array
+                }
+            };
+            // Function to add a supplement marker
+            const addSupplementMarker = (position, mapInstance) => {
+                const supplement = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/b/hospital.png', // Image for the supplement
+                        scaledSize: new gm.Size(30, 30), // Adjust size as needed
+                    },
+
+                });
+
+                // Store the supplement's position
+                supplement.position = position;
+
+                // When supplement is clicked, set currentSupplement and clear currentMarket
+                supplement.addListener('click', e => {
+                    this.showDropDownMessage('A hospital with 80% probability to get a bandage, 20% to get a medicine');
+                    currentSupplement = supplement; // Set the current supplement marker
+                    currentMarket = null; // Clear any active market
+                    currentArmory = null;
+                });
+
+                this.supplements.push(supplement); // Add supplement to the array
+            };
+
+            // market
+            // Function to add a market marker
+            const addMarketMarker = (position, mapInstance) => {
+                const market = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/b/store.png', // Image for the market
+                        scaledSize: new gm.Size(30, 30), // Adjust size as needed
+                    },
+                });
+
+                // Store the market's position and visited status
+                market.position = position;
+                market.visited = false; // Track if the market has already been visited
+
+                // When market is clicked, set currentMarket and clear currentSupplement
+                market.addListener('click', e => {
+                    this.showDropDownMessage('A market with 40% probability to get a food, 30% to get a drink, 20% to get a bandage, 10% to get a knife');
+                    currentArmory = null;
+                    currentMarket = market; // Set the current market marker
+                    currentSupplement = null; // Clear any active supplement
+                });
+
+                this.markets.push(market); // Add market to the array
+            };
+
+            // Function to add a armory marker
+            const addArmoryMarker = (position, mapInstance) => {
+                const armory = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/b/factory.png', // Image for the weapon store
+                        scaledSize: new gm.Size(30, 30), // Adjust size as needed
+                    },
+                });
+
+                // Store the armory's position and visited status
+                armory.position = position;
+                armory.visited = false; // Track if the armory has already been visited
+
+                // When armory is clicked, set currentWeapon and clear currentSupplement and currentMarket
+                armory.addListener('click', e => {
+                    this.showDropDownMessage('A weapon shop');
+                    currentArmory = armory;// Set the current armory marker
+                    currentMarket = null; // Clear any active  market marker
+                    currentSupplement = null; // Clear any active supplement
+                });
+
+                this.armory.push(armory); // Add weapon to the array
+            };
+
+            // // Function to add a market marker
+            const addSurvivalHubMarker = (position, mapInstance) => {
+                const survivalHub = new gm.Marker({
+                    map: mapInstance,
+                    position,
+                    icon: {
+                        url: 'image/b/castle.png',
+                        scaledSize: new gm.Size(40, 40),
+                    }
+                });
+
+                survivalHub.addListener('click', e => {
+                    this.showDropDownMessage('A survival hub, kill the zombie king to win');
+                });
+
+                this.survivalHub.push(survivalHub); // Add survivalHub to the array
+            };
+
+            // Interaction handler for market and hospital when pressing the 'f' key
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'f' || e.key === 'F') { // Check for 'F' key
+                    const isNearSupplement = this.checkSupplementProximity(); // Check proximity to supplement
+                    const isNearMarket = this.checkMarketProximity(); // Check proximity to market
+                    const isNearArmory = this.checkArmoryProximity(); // Check proximity to armory
+                    const isNearPortal = this.checkPortalProximity(); // Check proximity to portal
+                    const isNearSurvivalHub = this.checkSurvivalHubProximity(); // Check proximity to Survival Hub
+
+
+                    // Portal interaction
+                    if (isNearPortal) {
+                        loadNewMapInstance(); // Load the new map if player is near the portal
+
+                        // Survival Hub interaction
+                    } else if (isNearSurvivalHub) {
+                        this.showDropDownMessage("Congratulations! You won the game!");
+
+                        this.winGame(); // Call a method to end the game if you have one
+
+                    }// Supplement interaction
+                    else if (isNearSupplement && currentSupplement) {
+                        if (!currentSupplement.visited) {
+                            const droppedItem = this.getRandomMedicineItems();
+                            this.handleDrop(droppedItem, "supplement");
+                        } else {
+                            this.showDropDownMessage("This hospital has already been visited.");
+                        }
+
+                        // Market interaction
+                    } else if (isNearMarket && currentMarket && !currentMarket.visited) {
+                        const droppedItem = this.getRandomItem();
+                        this.handleDrop(droppedItem, "market");
+
+                        // Armory interaction
+                    } else if (isNearArmory && currentArmory && !currentArmory.visited) {
+                        const droppedItem = this.getRandomWeapons();
+                        this.handleDrop(droppedItem, "armory");
+
+                    } else {
+                        // Default messages if no valid interaction
+                        if (!isNearMarket && !isNearSupplement && !isNearArmory && !isNearPortal) {
+                            this.showDropDownMessage("No hospital, market, armory, or portal nearby!");
+                        } else if (isNearSupplement && currentSupplement.visited) {
+                            this.showDropDownMessage("This hospital has already been visited.");
+                        } else if (isNearMarket && currentMarket.visited) {
+                            this.showDropDownMessage("This market has already been visited.");
+                        } else if (isNearArmory && currentArmory.visited) {
+                            this.showDropDownMessage("This armory has already been visited.");
+                        }
+                    }
+                }
+            });
+
+            // Zombie attack interactional
+            let canAttack = true; // Flag to check if attack is allowed
+
+            document.addEventListener('keydown', (e) => {
+                if ((e.key === 'e' || e.key === 'E') && canAttack) {
+                    this.checkZombieProximityForAttack();
+
+                    // Log currentZombie state for debugging
+                    console.log('Current zombie:', currentZombie);
+
+                    // Ensure the zombie is within range before attacking
+                    if (!currentZombie || !this.isZombieInRange(currentZombie)) {
+                        this.showDropDownMessage('No zombie selected to attack or the zombie is too far away!');
+                        console.log('No zombie in range or selected to attack.');
+                        return;
+                    }
+
+                    const attackValue = this.player.attack;
+
+                    // Validate player attack value
+                    if (typeof attackValue !== 'number' || isNaN(attackValue)) {
+                        alert('Error: Invalid player attack value!');
+                        return;
+                    }
+
+                    // Reduce the selected zombie's HP
+                    currentZombie.customData.hp -= attackValue;
+                    audio5.play(); // Play attack sound
+                    this.showDropDownMessage(`You attacked the zombie! Zombie HP: ${currentZombie.customData.hp}`);
+
+                    canAttack = false; // Disable further attacks until the cooldown resets
+
+                    // Kill the zombie if HP is 0 or below
+                    if (currentZombie.customData.hp <= 0) {
+                        this.killZombie(currentZombie);
+                        currentZombie = null; // Reset currentZombie after it's killed
+                    }
+                }
+            });
+
+            document.addEventListener('keyup', (e) => {
+                if (e.key === 'e' || e.key === 'E') {
+                    canAttack = true;
+                }
+            });
+
+            // Toggle item box visibility when 'I' key is pressed
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'i' || e.key === 'I') {
+                    const itemBox = document.getElementById('itemBox');
+                    if (itemBox.style.display === 'none' || itemBox.style.display === '') {
+                        itemBox.style.display = 'block'; // Show the item box
+                    } else {
+                        itemBox.style.display = 'none'; // Hide the item box
+                    }
+                }
+            });
+
+
+            $(document).keydown(e => {
+                if (this.win) return; 
+
+                switch (e.code) {
+                    case 'KeyW': this.move(0); break;
+                    case 'KeyD': this.move(90); break;
+                    case 'KeyS': this.move(180); break;
+                    case 'KeyA': this.move(270); break;
+                }
+            });
+
+            const loadNewMapInstance = () => {
+                // Save player's collected items before switching maps
+                const savedItems = [...this.player.collectedItems]; // Clone the collected items array
+
+                const newMapCenter = this.getRandomLatLng(); // Get a new center position
+
+                const newDistance = 1000;
+                this.useBounds = false; // Set to false for free movement in the new instance
+
+                // Compute the bounds based on the new center
+                const sw = gm.geometry.spherical.computeOffset(newMapCenter, newDistance, 225); // South-West corner
+                const ne = gm.geometry.spherical.computeOffset(newMapCenter, newDistance, 45);  // North-East corner
+                const bounds = new gm.LatLngBounds(sw, ne);
+                this.bounds = bounds; // Vue data reference
+
+
+
+                // Create a new map instance with different settings
+                const newMap = new gm.Map($('#map')[0], {
+                    center: newMapCenter,
+                    zoom: 18,
+                    disableDefaultUI: true,
+                    clickableIcons: false,
+                    fullscreenControl: true,
+                    keyboardShortcuts: false,
+                    gestureHandling: 'none',
+                    minZoom: 18,
+                    maxZoom: 18,
+                    restriction: {
+                        latLngBounds: computeBounds(newMapCenter, newDistance + 40),
+                        strictBounds: true,
+                    },
+                });
+
+                // Update the current map reference to the new map
+                this.map = newMap;
+
+                gm.event.addListenerOnce(newMap, 'bounds_changed', e => {
+                    generateMarkers(newMap); // Call the function to generate markers
+                    this.move(); // Move player with bounds if necessary
+                    setInterval(() => {
+                        regenerateZombies(newMap);
+                    }, 20000); // 20 seconds
+
+                });
+
+                // Assuming you have a function to create the health bar element
+                this.createHealthBar();
+
+                this.loadPlayerData();
+
+
+                this.map.controls[gm.ControlPosition.TOP_LEFT].push(panel);
+
+
+                const player = new gm.Marker({
+                    position: newMapCenter,
+                    map: newMap,
+                    icon: 'image/player.gif',
+                    animation: gm.Animation.DROP,
+                    id: 'playerMarker',
+                });
+
+                this.player = player; // Update the Vue data reference for the player marker
+
+                const rect = new gm.Rectangle({
+                    map: newMap,
+                    bounds,
+                    strokeColor: 'red',
+                    strokeWeight: 10,
+                    fillOpacity: 0,
+                    clickable: false,
+                });
+
+            }
+        },
+
+
+        unmounted() {
+            map = null;
+            // TODO(6B): Remove DOM event handlers
+            $(document).off('keydown');
+        },
+    });
+</script>
